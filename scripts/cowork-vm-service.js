@@ -1090,7 +1090,7 @@ class KvmBackend extends BackendBase {
             const virtiofsSock = path.join(this.sessionDir, 'virtiofs.sock');
             qemuArgs.push(
                 '-chardev', `socket,id=virtiofs,path=${virtiofsSock}`,
-                '-device', 'vhost-user-fs-pci,chardev=virtiofs,tag=hostshare',
+                '-device', 'vhost-user-fs-pci,chardev=virtiofs,tag=claudeshared',
             );
         }
 
@@ -1517,7 +1517,7 @@ class KvmBackend extends BackendBase {
 
         if (this.virtiofsdProcess) {
             // virtiofs is active — guest can access host files via mount
-            const guestPath = path.join('/mnt/host', subpath || '');
+            const guestPath = path.join('/mnt/.virtiofs-root', subpath || '');
             return { guestPath };
         }
 
