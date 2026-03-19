@@ -14,7 +14,7 @@ Model Context Protocol settings are stored in:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLAUDE_USE_WAYLAND` | unset | Set to `1` to use native Wayland instead of XWayland. Note: Global hotkeys won't work in native Wayland mode. |
-| `CLAUDE_MENU_BAR` | unset (`auto`) | Controls menu bar behavior: `auto` (hidden, Alt toggles), `visible` (always shown), `hidden` (always hidden, Alt disabled). See [Menu Bar](#menu-bar) below. |
+| `CLAUDE_MENU_BAR` | unset (`auto`) | Controls menu bar behavior: `auto` (hidden, Alt toggles), `visible` / `1` (always shown), `hidden` / `0` (always hidden, Alt disabled). See [Menu Bar](#menu-bar) below. |
 
 ### Wayland Support
 
@@ -37,8 +37,8 @@ By default, the menu bar is hidden but can be toggled with the Alt key (`auto` m
 | Value | Menu visible | Alt toggles | Use case |
 |-------|-------------|-------------|----------|
 | unset / `auto` | No | Yes | Default — hidden, Alt toggles |
-| `visible` | Yes | No | Stable layout, no shift on Alt |
-| `hidden` | No | No | Menu fully disabled, Alt free |
+| `visible` / `1` / `true` / `on` | Yes | No | Stable layout, no shift on Alt |
+| `hidden` / `0` / `false` / `off` | No | No | Menu fully disabled, Alt free |
 
 ```bash
 # Always show the menu bar (no layout shift on Alt)

@@ -271,14 +271,20 @@ run_doctor() {
 	# -- Menu bar mode --
 	local menu_bar_mode="${CLAUDE_MENU_BAR:-}"
 	if [[ -n $menu_bar_mode ]]; then
-		case "${menu_bar_mode,,}" in
+		local resolved_mode="${menu_bar_mode,,}"
+		# Resolve boolean-style aliases
+		case "$resolved_mode" in
+			1|true|yes|on) resolved_mode='visible' ;;
+			0|false|no|off) resolved_mode='hidden' ;;
+		esac
+		case "$resolved_mode" in
 			auto|visible|hidden)
-				_pass "Menu bar mode: ${menu_bar_mode,,} (CLAUDE_MENU_BAR=$menu_bar_mode)"
+				_pass "Menu bar mode: $resolved_mode (CLAUDE_MENU_BAR=$menu_bar_mode)"
 				;;
 			*)
 				_warn "Unknown CLAUDE_MENU_BAR: '$menu_bar_mode'"
 				_info 'Will fall back to auto'
-				_info "Valid values: auto, visible, hidden"
+				_info "Valid values: auto, visible, hidden (or 0/1/true/false/yes/no/on/off)"
 				;;
 		esac
 	else
