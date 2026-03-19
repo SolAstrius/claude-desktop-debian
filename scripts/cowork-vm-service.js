@@ -870,6 +870,7 @@ class BwrapBackend extends LocalBackend {
 const VM_BASE_DIR = path.join(os.homedir(), '.local/share/claude-desktop/vm');
 const VM_SESSION_DIR = path.join(VM_BASE_DIR, 'sessions');
 const VSOCK_GUEST_PORT = 51234;  // 0xC822 — matches guest sdk-daemon
+const VIRTIOFS_GUEST_MOUNT = '/mnt/.virtiofs-root';
 const QMP_CAPABILITIES = JSON.stringify({ execute: 'qmp_capabilities' });
 
 /** Event types forwarded from the guest sdk-daemon to subscribers. */
@@ -980,8 +981,8 @@ class KvmBackend extends BackendBase {
         const initrdPath = path.join(VM_BASE_DIR, 'initrd');
 
         // Start virtiofsd for home directory share (if available)
+        const virtiofsSock = path.join(this.sessionDir, 'virtiofs.sock');
         try {
-            const virtiofsSock = path.join(this.sessionDir, 'virtiofs.sock');
             this.virtiofsdProcess = spawnProcess('virtiofsd', [
                 `--socket-path=${virtiofsSock}`,
                 '-o', `source=${os.homedir()}`,
@@ -1087,7 +1088,6 @@ class KvmBackend extends BackendBase {
 
         // virtiofs char device (if virtiofsd is running)
         if (this.virtiofsdProcess) {
-            const virtiofsSock = path.join(this.sessionDir, 'virtiofs.sock');
             qemuArgs.push(
                 '-chardev', `socket,id=virtiofs,path=${virtiofsSock}`,
                 '-device', 'vhost-user-fs-pci,chardev=virtiofs,tag=claudeshared',
@@ -1275,7 +1275,7 @@ class KvmBackend extends BackendBase {
                 // Response to a request we sent — route to pending callback
                 // Guest sends {type:"response", id:"1", result:{success:true}}
                 if (msg.error) {
-                    log('KvmBackend: guest response ERROR for id=' + msg.id + ':', JSON.stringify(msg.error));
+                    log(`KvmBackend: guest response ERROR for id=${msg.id}:`, JSON.stringify(msg.error));
                 }
                 if (this._pendingCallbacks && msg.id !== undefined) {
                     const cb = this._pendingCallbacks.get(String(msg.id));
@@ -1351,6 +1351,19 @@ class KvmBackend extends BackendBase {
                 reject(new Error('QMP command timeout'));
             }, 10000);
         });
+    }
+
+    async _ensureSdkInstalled() {
+        if (!this._pendingSdkInstall || !this.guestConnected) return;
+        try {
+            log('KvmBackend: installing SDK in guest');
+            await this._forwardToGuest({
+                method: 'installSdk', params: this._pendingSdkInstall
+            });
+            this._pendingSdkInstall = null;
+        } catch (e) {
+            log(`KvmBackend: installSdk forward failed: ${e.message}`);
+        }
     }
 
     _forwardToGuest(request) {
@@ -1477,17 +1490,7 @@ class KvmBackend extends BackendBase {
         log(`KvmBackend spawn: id=${id}, forwarding to guest`);
 
         // Ensure SDK is installed in the guest before spawning
-        if (this._pendingSdkInstall && this.guestConnected) {
-            try {
-                log('KvmBackend: installing SDK in guest before spawn');
-                await this._forwardToGuest({
-                    method: 'installSdk', params: this._pendingSdkInstall
-                });
-                this._pendingSdkInstall = null;
-            } catch (e) {
-                log(`KvmBackend: pre-spawn installSdk failed: ${e.message}`);
-            }
-        }
+        await this._ensureSdkInstalled();
 
         try {
             const result = await this._forwardToGuest({
@@ -1551,7 +1554,7 @@ class KvmBackend extends BackendBase {
 
         if (this.virtiofsdProcess) {
             // virtiofs is active — guest can access host files via mount
-            const guestPath = path.join('/mnt/.virtiofs-root', subpath || '');
+            const guestPath = path.join(VIRTIOFS_GUEST_MOUNT, subpath || '');
             return { guestPath };
         }
 
@@ -1602,18 +1605,13 @@ class KvmBackend extends BackendBase {
             // Compute the guest-side path via virtiofs mount
             const homeDir = os.homedir();
             const relPath = path.relative(homeDir, resolved);
-            this.guestSdkPath = path.join('/mnt/.virtiofs-root', relPath);
+            this.guestSdkPath = path.join(VIRTIOFS_GUEST_MOUNT, relPath);
             log(`KvmBackend: guest SDK path: ${this.guestSdkPath}`);
         }
-        // Forward to guest so it can prepare the SDK
+        // Forward to guest so it can prepare the SDK (or defer until spawn)
         this._pendingSdkInstall = params;
         if (this.guestConnected) {
-            try {
-                await this._forwardToGuest({ method: 'installSdk', params });
-                this._pendingSdkInstall = null;
-            } catch (e) {
-                log(`KvmBackend: installSdk forward failed: ${e.message}`);
-            }
+            await this._ensureSdkInstalled();
         } else {
             log('KvmBackend: guest not connected yet, will install SDK before spawn');
         }
