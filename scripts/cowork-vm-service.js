@@ -581,6 +581,7 @@ class LocalBackend extends BackendBase {
 
         return {
             id,
+            name,
             actualCommand: resolved.command,
             cleanArgs: cleanSpawnArgs(args || [], mountMap),
             mergedEnv: buildSpawnEnv(env, mountMap),
@@ -774,17 +775,46 @@ class BwrapBackend extends LocalBackend {
         const prepared = this._prepareSpawn(params);
         if (!prepared) return {};
 
-        const { id, actualCommand, cleanArgs, mergedEnv,
-            workDir } = prepared;
+        const { id, name, actualCommand } = prepared;
+        const { additionalMounts } = params;
+        const mountMap = this.lastMountMap || {};
 
-        // Build bwrap arguments
+        // Guest paths (/sessions/...) exist inside our bwrap sandbox,
+        // so pass args and env through as-is (no guest->host translation).
+        const rawArgs = params.args || [];
+        const mergedEnv = {
+            ...filterEnv(process.env, ['CLAUDE_CODE_']),
+            ...filterEnv(params.env || {}),
+            TERM: 'xterm-256color',
+        };
+
+        // Build a minimal sandbox: empty tmpfs root with only the
+        // necessary system paths bound in read-only. This avoids
+        // exposing the real home directory and allows creating the
+        // /sessions/ guest path structure that claude-code-vm expects.
         const bwrapArgs = [
-            '--ro-bind', '/', '/',
+            '--tmpfs', '/',
+            '--ro-bind', '/usr', '/usr',
+            '--ro-bind', '/etc', '/etc',
             '--dev', '/dev',
             '--proc', '/proc',
             '--tmpfs', '/tmp',
             '--tmpfs', '/run',
         ];
+
+        // Handle /bin, /lib, /lib64, /sbin: on merged-usr distros
+        // (Fedora, recent Debian/Ubuntu) these are symlinks into /usr.
+        // On others they are real directories needing separate mounts.
+        for (const dir of ['/bin', '/lib', '/lib64', '/sbin']) {
+            try {
+                const target = fs.readlinkSync(dir);
+                bwrapArgs.push('--symlink', target, dir);
+            } catch (_) {
+                if (fs.existsSync(dir)) {
+                    bwrapArgs.push('--ro-bind', dir, dir);
+                }
+            }
+        }
 
         // Preserve DNS resolution: /etc/resolv.conf is often a symlink
         // to /run/systemd/resolve/stub-resolv.conf which --tmpfs /run
@@ -796,31 +826,27 @@ class BwrapBackend extends LocalBackend {
                 bwrapArgs.push('--ro-bind', resolvedDir, resolvedDir);
             }
         } catch (e) {
-            // resolv.conf missing or unresolvable — DNS may not work
             log('BwrapBackend: could not resolve /etc/resolv.conf:', e.message);
         }
 
-        // Home is read-only; only workDir and explicit mounts are writable.
-        // This prevents the sandbox from writing to ~/.ssh, ~/.gnupg, etc.
+        // Bind the SDK binary read-only
+        const sdkDir = path.dirname(actualCommand);
+        bwrapArgs.push('--ro-bind', sdkDir, sdkDir);
+
+        // Create home directory (needed for ~ expansion) but don't
+        // expose real home contents.
         const homeDir = os.homedir();
-        bwrapArgs.push('--ro-bind', homeDir, homeDir);
-        bwrapArgs.push('--bind', workDir, workDir);
+        bwrapArgs.push('--dir', homeDir);
 
-        // Apply stored mount binds (from mountPath() calls) as writable
-        const boundPaths = new Set([workDir]);
-        for (const [, hostPath] of this.mountBinds) {
-            if (fs.existsSync(hostPath) && !boundPaths.has(hostPath)) {
-                bwrapArgs.push('--bind', hostPath, hostPath);
-                boundPaths.add(hostPath);
-            }
-        }
+        // Create /sessions/<name>/mnt/ guest path structure and mount
+        // host directories at guest paths, matching the KVM backend
+        // layout. The claude-code-vm binary translates all paths to
+        // /sessions/ internally, so these must exist inside the sandbox.
+        const sessionMnt = `/sessions/${name}/mnt`;
+        bwrapArgs.push('--dir', `/sessions/${name}`);
+        bwrapArgs.push('--dir', sessionMnt);
 
-        // Bind-mount additional directories from mountMap (already
-        // validated to stay within home by buildMountMap).
-        const { additionalMounts } = params;
-        const mountMap = this.lastMountMap || {};
         for (const [mountName, hostPath] of Object.entries(mountMap)) {
-            if (boundPaths.has(hostPath)) continue;
             try {
                 if (!fs.existsSync(hostPath)) {
                     fs.mkdirSync(hostPath, { recursive: true });
@@ -829,11 +855,11 @@ class BwrapBackend extends LocalBackend {
                 log(`BwrapBackend spawn: could not create ${hostPath}: ${e.message}`);
                 continue;
             }
+            const guestPath = `${sessionMnt}/${mountName}`;
             const mode = additionalMounts?.[mountName]?.mode;
             const bindType = mode === 'ro' ? '--ro-bind' : '--bind';
-            bwrapArgs.push(bindType, hostPath, hostPath);
-            boundPaths.add(hostPath);
-            log(`BwrapBackend spawn: mount ${mountName} -> ${hostPath} (${mode || 'rw'})`);
+            bwrapArgs.push(bindType, hostPath, guestPath);
+            log(`BwrapBackend spawn: mount ${mountName}: ${hostPath} -> ${guestPath} (${mode || 'rw'})`);
         }
 
         // Namespace isolation + actual command
@@ -843,13 +869,25 @@ class BwrapBackend extends LocalBackend {
             '--new-session',
             '--',
             actualCommand,
-            ...cleanArgs,
+            ...rawArgs,
         );
 
-        log(`BwrapBackend spawn: bwrap args=${JSON.stringify(bwrapArgs)}`);
-        log(`BwrapBackend spawn: cwd=${workDir}`);
+        // Use the primary user mount as cwd (first non-dotfile, non-uploads mount)
+        const primaryMount = Object.keys(mountMap).find(
+            n => !n.startsWith('.') && n !== 'uploads',
+        );
+        const guestWorkDir = primaryMount
+            ? `${sessionMnt}/${primaryMount}`
+            : sessionMnt;
 
-        this._spawnLocal(id, 'bwrap', bwrapArgs, workDir, mergedEnv);
+        log(`BwrapBackend spawn: bwrap args=${JSON.stringify(bwrapArgs)}`);
+        log(`BwrapBackend spawn: cwd=${guestWorkDir}`);
+
+        // Use host-side cwd for Node's spawn (guest paths don't exist
+        // on host). bwrap --chdir sets the actual cwd inside the sandbox.
+        this._spawnLocal(id, 'bwrap',
+            ['--chdir', guestWorkDir, ...bwrapArgs],
+            os.homedir(), mergedEnv);
         return {};
     }
 
