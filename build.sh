@@ -103,14 +103,14 @@ detect_architecture() {
 
 	case "$raw_arch" in
 		x86_64)
-			claude_download_url='https://downloads.claude.ai/releases/win32/x64/1.1.7464/Claude-2809b60543935626ef2d64d6bed0988205948463.exe'
+			claude_download_url='https://downloads.claude.ai/releases/win32/x64/1.1.7714/Claude-3bd6f69326a0abac98bb269c29140e2a543cad64.exe'
 			claude_exe_sha256=''
 			architecture='amd64'
 			claude_exe_filename='Claude-Setup-x64.exe'
 			echo 'Configured for amd64 (x86_64) build.'
 			;;
 		aarch64)
-			claude_download_url='https://downloads.claude.ai/releases/win32/arm64/1.1.7464/Claude-2809b60543935626ef2d64d6bed0988205948463.exe'
+			claude_download_url='https://downloads.claude.ai/releases/win32/arm64/1.1.7714/Claude-3bd6f69326a0abac98bb269c29140e2a543cad64.exe'
 			claude_exe_sha256=''
 			architecture='arm64'
 			claude_exe_filename='Claude-Setup-arm64.exe'
