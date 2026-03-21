@@ -8,14 +8,46 @@ console.log('[Frame Fix] Wrapper loaded');
 // Fix process.resourcesPath to match the actual location of app.asar.
 // In Nix builds, electron is a separate store path so process.resourcesPath
 // points to the Electron package's resources dir, not where our tray icons
-// and app.asar.unpacked live. Deriving from __dirname (the asar root) gives
-// the correct path; for deb/AppImage builds the values already match.
-const derivedResourcesPath = path.dirname(__dirname);
-if (derivedResourcesPath !== process.resourcesPath) {
+// and app.asar.unpacked live.
+//
+// The NixOS launcher sets CLAUDE_RESOURCES_PATH to a merged directory
+// containing symlinks to both Electron's and the app's resources. This
+// is the most reliable approach because Electron's internal C++ code and
+// patched fs bindings cache the original resourcesPath before any JS runs.
+const mergedResources = process.env.CLAUDE_RESOURCES_PATH;
+const derivedResourcesPath = mergedResources || path.dirname(__dirname);
+const originalResourcesPath = process.resourcesPath;
+if (derivedResourcesPath !== originalResourcesPath) {
   console.log('[Frame Fix] Correcting process.resourcesPath');
-  console.log('[Frame Fix]   Was:', process.resourcesPath);
+  console.log('[Frame Fix]   Was:', originalResourcesPath);
   console.log('[Frame Fix]   Now:', derivedResourcesPath);
   process.resourcesPath = derivedResourcesPath;
+
+  // Electron's internal fs patches (node:electron/js2c/node_init)
+  // use the original C++-level resourcesPath for file operations.
+  // Monkey-patch the native fs module to redirect any accesses from
+  // the old Electron resources path to the correct merged path.
+  // This must cover both sync and async variants since the minified
+  // app code may use either.
+  const fs = require('fs');
+  const _redirect = (p) => {
+    if (typeof p === 'string' && p.startsWith(originalResourcesPath)) {
+      return derivedResourcesPath + p.slice(originalResourcesPath.length);
+    }
+    return p;
+  };
+  for (const m of [
+    'readFileSync', 'existsSync', 'statSync', 'lstatSync',
+    'readdirSync', 'copyFileSync', 'accessSync',
+    'readFile', 'stat', 'lstat', 'readdir', 'copyFile', 'access',
+    'openSync', 'open', 'createReadStream',
+  ]) {
+    const orig = fs[m];
+    if (!orig) continue;
+    fs[m] = function(p, ...a) {
+      return orig.call(this, _redirect(p), ...a);
+    };
+  }
 }
 
 // Menu bar visibility mode, controlled by CLAUDE_MENU_BAR env var:

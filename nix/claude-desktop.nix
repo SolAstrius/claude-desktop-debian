@@ -157,6 +157,8 @@ stdenvNoCC.mkDerivation {
 # Claude Desktop launcher for NixOS
 
 electron_exec="ELECTRON_PLACEHOLDER"
+electron_resources="ELECTRON_RESOURCES_PLACEHOLDER"
+app_resources="RESOURCES_PLACEHOLDER"
 app_path="RESOURCES_PLACEHOLDER/app.asar"
 
 source "LAUNCHER_LIB_PLACEHOLDER"
@@ -172,6 +174,22 @@ setup_logging || exit 1
 setup_electron_env 'nix'
 cleanup_stale_lock
 cleanup_stale_cowork_socket
+
+# On NixOS, Electron and the app live in separate store paths.
+# Electron hardcodes process.resourcesPath from its binary location,
+# which can't be overridden. Create a merged resources directory
+# with symlinks to both so all file lookups succeed.
+merged_resources="$log_dir/resources"
+mkdir -p "$merged_resources"
+# Symlink Electron's resources (default_app.asar, etc.)
+for f in "$electron_resources"/*; do
+	ln -sf "$f" "$merged_resources/" 2>/dev/null
+done
+# Symlink app resources (overrides Electron's on conflict)
+for f in "$app_resources"/*; do
+	ln -sf "$f" "$merged_resources/" 2>/dev/null
+done
+export CLAUDE_RESOURCES_PATH="$merged_resources"
 
 # Log startup info
 log_message '--- Claude Desktop Launcher Start (NixOS) ---'
@@ -195,6 +213,18 @@ build_electron_args 'nix'
 # Add app path
 electron_args+=("$app_path")
 
+# Pre-launch cowork-vm-service daemon if not already running.
+# The app's auto-launcher only triggers on ECONNREFUSED, not
+# ENOENT, so without a pre-existing socket the service never
+# starts on a fresh install.
+cowork_svc="RESOURCES_PLACEHOLDER/app.asar.unpacked/cowork-vm-service.js"
+cowork_sock="''${XDG_RUNTIME_DIR:-/tmp}/cowork-vm-service.sock"
+if [[ -f "$cowork_svc" && ! -S "$cowork_sock" ]]; then
+	ELECTRON_RUN_AS_NODE=1 "$electron_exec" "$cowork_svc" &
+	disown
+	log_message "Pre-launched cowork-vm-service (PID $!)"
+fi
+
 # Execute Electron
 log_message "Executing: $electron_exec ''${electron_args[*]} $*"
 "$electron_exec" "''${electron_args[@]}" "$@" >> "$log_file" 2>&1
@@ -204,6 +234,7 @@ exit $exit_code
 LAUNCHER
     # Substitute placeholders with Nix store paths
     substituteInPlace $out/bin/claude-desktop \
+      --replace-fail "ELECTRON_RESOURCES_PLACEHOLDER" "${electron}/libexec/electron/resources" \
       --replace-fail "ELECTRON_PLACEHOLDER" "${electron}/bin/electron" \
       --replace-fail "RESOURCES_PLACEHOLDER" "$out/lib/claude-desktop/resources" \
       --replace-fail "LAUNCHER_LIB_PLACEHOLDER" "$out/lib/claude-desktop/launcher-common.sh"
