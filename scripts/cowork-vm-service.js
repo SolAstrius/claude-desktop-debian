@@ -1635,6 +1635,41 @@ class KvmBackend extends BackendBase {
         // Ensure SDK is installed in the guest before spawning
         await this._ensureSdkInstalled();
 
+        // The guest image expects /usr/local/bin/claude but that path
+        // only exists if the smol-bin disk was properly mounted by the
+        // guest init.  If guestSdkPath is set (SDK binary accessible
+        // via virtiofs), copy it to /usr/local/bin/claude inside the
+        // guest before spawning.  The copy lands on the overlay disk
+        // which is writable and exec-capable.
+        if (this.guestSdkPath && params.command &&
+            path.basename(params.command) === 'claude') {
+            try {
+                const copyId = `sdk-copy-${Date.now()}`;
+                log(`KvmBackend: copying SDK binary into guest: ` +
+                    `${this.guestSdkPath} -> ${params.command}`);
+                const copyResult = await this._forwardToGuest({
+                    method: 'spawn',
+                    params: {
+                        id: copyId,
+                        name: 'sdk-copy',
+                        command: '/bin/sh',
+                        args: ['-c',
+                            `cp "${this.guestSdkPath}" ` +
+                            `"${params.command}" && ` +
+                            `chmod +x "${params.command}"`
+                        ],
+                        cwd: '/',
+                        env: {},
+                    },
+                });
+                // Wait for the copy to finish
+                await new Promise(r => setTimeout(r, 2000));
+                log('KvmBackend: SDK binary copy complete');
+            } catch (e) {
+                log(`KvmBackend: SDK copy failed: ${e.message}`);
+            }
+        }
+
         try {
             const result = await this._forwardToGuest({
                 method: 'spawn', params
