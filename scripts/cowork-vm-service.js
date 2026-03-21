@@ -1635,6 +1635,18 @@ class KvmBackend extends BackendBase {
         // Ensure SDK is installed in the guest before spawning
         await this._ensureSdkInstalled();
 
+        // The app sends command="/usr/local/bin/claude" which does
+        // not exist in the guest.  Substitute with the guest-side
+        // SDK path derived from the virtiofs home share mount.
+        if (this.guestSdkPath && params.command) {
+            const base = path.basename(params.command);
+            if (base === 'claude') {
+                log(`KvmBackend spawn: rewriting command ` +
+                    `${params.command} -> ${this.guestSdkPath}`);
+                params = { ...params, command: this.guestSdkPath };
+            }
+        }
+
         try {
             const result = await this._forwardToGuest({
                 method: 'spawn', params
