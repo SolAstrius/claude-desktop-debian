@@ -809,6 +809,12 @@ class BwrapBackend extends LocalBackend {
         // NIX_LD and NIX_LD_LIBRARY_PATH point there.
         if (fs.existsSync('/nix/store')) {
             bwrapArgs.push('--ro-bind', '/nix', '/nix');
+            // Bind the nix daemon socket writable so nix-shell
+            // and nix-build can communicate with the daemon.
+            const nixSock = '/nix/var/nix/daemon-socket/socket';
+            if (fs.existsSync(nixSock)) {
+                bwrapArgs.push('--bind', nixSock, nixSock);
+            }
             if (fs.existsSync('/run/current-system')) {
                 bwrapArgs.push(
                     '--ro-bind', '/run/current-system',
