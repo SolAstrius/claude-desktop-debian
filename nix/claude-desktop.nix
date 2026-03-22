@@ -44,7 +44,7 @@ let
 
   desktopItem = makeDesktopItem {
     name = "claude-desktop";
-    exec = "claude-desktop %u";
+    exec = "env COWORK_VM_BACKEND=bwrap claude-desktop %u";
     icon = "claude-desktop";
     type = "Application";
     terminal = false;
