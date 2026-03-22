@@ -805,8 +805,16 @@ class BwrapBackend extends LocalBackend {
         // NixOS: all binaries and libraries live in /nix/store.
         // Without it, dynamically linked executables (including the
         // SDK binary) can't resolve ld-linux or shared libraries.
+        // /run/current-system is also needed because nix-ld's
+        // NIX_LD and NIX_LD_LIBRARY_PATH point there.
         if (fs.existsSync('/nix/store')) {
             bwrapArgs.push('--ro-bind', '/nix', '/nix');
+            if (fs.existsSync('/run/current-system')) {
+                bwrapArgs.push(
+                    '--ro-bind', '/run/current-system',
+                    '/run/current-system'
+                );
+            }
         }
 
         // Handle /bin, /lib, /lib64, /sbin: on merged-usr distros
